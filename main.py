@@ -55,9 +55,9 @@ def evaluate(model, data_loader, matcher, device):
 
 if __name__ == "__main__":
     # 在项目目录运行 python main.py，改这里的数据路径和参数即可。
-    data_root = "./data/coco"
+    data_root = "/kaggle/input/datasets/awsaf49/coco-2017-dataset/coco2017"
     epochs = 50
-    batch_size = 2
+    batch_size = 4
     image_size = 640
     lr = 1e-4
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -65,12 +65,18 @@ if __name__ == "__main__":
     train_dataset = COCODataset(data_root, "train2017", image_size)
     val_dataset = COCODataset(data_root, "val2017", image_size)
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True,
-        num_workers=0, collate_fn=collate_fn,
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
+        collate_fn=collate_fn,
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False,
-        num_workers=0, collate_fn=collate_fn,
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+        collate_fn=collate_fn,
     )
 
     model = DetrModel().to(device)
@@ -78,7 +84,9 @@ if __name__ == "__main__":
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     best_loss = float("inf")
 
-    print(f"device={device}, train图片={len(train_dataset)}, val图片={len(val_dataset)}")
+    print(
+        f"device={device}, train图片={len(train_dataset)}, val图片={len(val_dataset)}"
+    )
 
     for epoch in range(epochs):
         train_loss = train_one_epoch(model, train_loader, matcher, optimizer, device)
