@@ -55,7 +55,7 @@ def evaluate(model, data_loader, matcher, device):
 
 if __name__ == "__main__":
     # 在项目目录运行 python main.py，改这里的数据路径和参数即可。
-    data_root = "/kaggle/input/datasets/awsaf49/coco-2017-dataset/coco2017"
+    data_root = "/kaggle/input/datasets/awsaf49/coco-2017-dataset"
     epochs = 50
     batch_size = 4
     image_size = 640
