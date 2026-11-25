@@ -72,6 +72,6 @@ if __name__ == "__main__":
 
         mode.eval()
         with torch.no_grad():
-            boxlast, label, conf = validation(mode, img, 0.5)
+            boxlast, label, conf = validation(mode, img, 0.8)
             save_path = os.path.join("results", imgname)
             draw(img, boxlast, label, conf, targets=targets, save_path=save_path)
