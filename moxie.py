@@ -325,7 +325,7 @@ from torchvision.utils import draw_bounding_boxes
 from torchvision.transforms.functional import pil_to_tensor, to_pil_image
 
 
-def draw(X, boxlast, label, conf, targets=None):
+def draw(X, boxlast, label, conf, targets=None, save_path=""):
     image = pil_to_tensor(X)
 
     labels = [f"{int(c)}: {float(s):.2f}" for c, s in zip(label, conf)]
@@ -343,7 +343,7 @@ def draw(X, boxlast, label, conf, targets=None):
             width=2,
         )
 
-    to_pil_image(result).show()
+    to_pil_image(result).save(save_path)
 
 
 class MyDataset(torch.utils.data.Dataset):
