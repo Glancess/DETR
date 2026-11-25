@@ -9,3 +9,4 @@ results/history.json
 .ipynb_checkpoints/
 .DS_Store
 *.pt
+*.jpg
