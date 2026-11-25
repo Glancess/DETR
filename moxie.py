@@ -229,6 +229,11 @@ def Loss(indices, targets, cls, box):
     # like [B,100],but cls like [B,100,81]
     precls = cls.transpose(1, 2)  # the grammar command that cls must in first
     cls_loss = F.cross_entropy(precls, rightcls, weight=weight)
+    with torch.no_grad():
+        fg_loss, bg_loss, fg_acc, back_acc = classification_metrics(cls, rightcls)
+        print(
+            f"fg_loss:{fg_loss}, bg_loss:{bg_loss}, fg_acc:{fg_acc}, back_acc:{back_acc}"
+        )
     boxallloss = boxallloss / gtboxnumber
     giousloss /= gtboxnumber
     print("_________________________")
@@ -237,6 +242,25 @@ def Loss(indices, targets, cls, box):
     print("giou:", giousloss.item())
     print("_________________________")
     return 2 * giousloss + 5 * boxallloss + cls_loss
+
+
+def classification_metrics(cls, rightcls):  # B 40 81,B 40
+    query_loss = F.cross_entropy(
+        cls.transpose(1, 2), rightcls, reduction="none"
+    )  # get shape B 40(i changed the query numbers)
+    fore = rightcls != 80
+    fg_loss = query_loss[fore].mean()
+    bg_loss = query_loss[~fore].mean()
+    last_precls = cls.argmax(-1)  # B 40,get the query pred cls
+    booll = last_precls == rightcls  # get the correct match
+    # 我们得到了 pre与right匹配的bool，也有 fore
+    fore_match = (fore & booll).sum()
+    fore_total = fore.sum()
+
+    fg_acc = fore_match / fore_total
+
+    back_acc = (~fore & booll).sum() / (~fore).sum()
+    return fg_loss, bg_loss, fg_acc, back_acc
 
 
 def train_one_epoch(optimizer, model, image, targets):
@@ -441,7 +465,7 @@ if __name__ == "__main__":
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device:", device)
-    epochs = 400
+    epochs = 200
     mode = model().to(device)
     mode.backbone.requires_grad_(False)
     optimizer = torch.optim.Adam(
