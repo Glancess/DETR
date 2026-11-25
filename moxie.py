@@ -115,7 +115,7 @@ class model(nn.Module):
         self.Encoder = Encoder()
         self.position = Getposition(20, 20)
         self.Decoder = Decoder()
-        self.Eobj = nn.Parameter(torch.randn(50, 256))
+        self.Eobj = nn.Parameter(torch.randn(40, 256))
         self.clshead = nn.Linear(256, 81)
         self.boxhead = nn.Sequential(
             nn.Linear(256, 256),
@@ -265,7 +265,7 @@ def collate_fn(batch):
 from PIL import Image
 
 
-def validation(model, X):
+def validation(model, X, threshold):
     model.eval()
     with torch.no_grad():
         transform = torchvision.transforms.Compose(
@@ -286,7 +286,7 @@ def validation(model, X):
         conf, label = p.max(-1)
         print(conf)
         print(label)
-        keep = (conf > 0.3) & (label != 80)  # 背景类 80 排除掉    threshold = 0.4
+        keep = (conf > threshold) & (label != 80)  # 背景类 80 排除掉    threshold = 0.4
         box = box[0][keep]  # [N, 4] 归一化 cxcywh
         label = label[keep]
         conf = conf[keep]
@@ -301,7 +301,7 @@ from torchvision.utils import draw_bounding_boxes
 from torchvision.transforms.functional import pil_to_tensor, to_pil_image
 
 
-def draw(X, boxlast, label, conf, target=None):
+def draw(X, boxlast, label, conf, targets=None):
     image = pil_to_tensor(X)
 
     labels = [f"{int(c)}: {float(s):.2f}" for c, s in zip(label, conf)]
@@ -310,11 +310,11 @@ def draw(X, boxlast, label, conf, target=None):
         image, boxlast.cpu(), labels=labels, colors="red", width=3
     )
 
-    if target is not None:
+    if targets is not None:
         result = draw_bounding_boxes(
             result,
-            target["gtbox"].cpu(),
-            labels=[str(int(c)) for c in target["cls"]],
+            targets[0]["gtbox"].cpu(),
+            labels=[str(int(c)) for c in targets[0]["cls"]],
             colors="green",
             width=2,
         )
@@ -433,15 +433,15 @@ if __name__ == "__main__":
     # print(target["gtbox"].dtype)
 
     train_dataloder = torch.utils.data.DataLoader(
-        train_dataset, 4, True, collate_fn=collate_fn
+        train_dataset, 6, True, collate_fn=collate_fn
     )
     val_dataloder = torch.utils.data.DataLoader(
-        val_dataset, 4, False, collate_fn=collate_fn
+        val_dataset, 6, False, collate_fn=collate_fn
     )
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device:", device)
-    epochs = 200
+    epochs = 400
     mode = model().to(device)
     mode.backbone.requires_grad_(False)
     optimizer = torch.optim.Adam(
