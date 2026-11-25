@@ -69,10 +69,10 @@ class EncoderLayer(nn.Module):
     def __init__(self):
         super().__init__()
         self.attn = MyAttention()
-        self.dropout1 = nn.Dropout(0.1)
+        self.dropout1 = nn.Dropout(0)
         self.layernorm1 = nn.LayerNorm(256)
         self.ffn = nn.Sequential(nn.Linear(256, 2048), nn.ReLU(), nn.Linear(2048, 256))
-        self.dropout2 = nn.Dropout(0.1)
+        self.dropout2 = nn.Dropout(0)
         self.layernorm2 = nn.LayerNorm(256)
 
     def forward(self, X, P):
@@ -144,9 +144,9 @@ class DecoderLayer(nn.Module):
         super().__init__()
         self.selfattn = MyAttention()
         self.crossattn = MyAttention()
-        self.dropout1 = nn.Dropout(0.1)
+        self.dropout1 = nn.Dropout(0)
         self.layernorm1 = nn.LayerNorm(256)
-        self.dropout2 = nn.Dropout(0.1)
+        self.dropout2 = nn.Dropout(0)
         self.layernorm2 = nn.LayerNorm(256)
         self.ffn = nn.Sequential(nn.Linear(256, 2048), nn.ReLU(), nn.Linear(2048, 256))
         self.layernorm3 = nn.LayerNorm(256)
@@ -441,7 +441,7 @@ if __name__ == "__main__":
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device:", device)
-    epochs = 400
+    epochs = 200
     mode = model().to(device)
     mode.backbone.requires_grad_(False)
     optimizer = torch.optim.Adam(
