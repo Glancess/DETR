@@ -14,3 +14,8 @@ if __name__ == "__main__":
     )
     for i in train_dataset.indices:
         print(i)
+    for filename in dataset.files:
+
+        index = dataset.files.index(filename)
+        if index in train_dataset.indices:
+            print(filename)
