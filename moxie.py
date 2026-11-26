@@ -487,7 +487,6 @@ if __name__ == "__main__":
         print("---------------Validation--------------------")
         mode.eval()
         with torch.no_grad():
-            valloss = 0
 
             for image, targets in val_dataloder:
                 image = image.to(device)
@@ -500,11 +499,9 @@ if __name__ == "__main__":
 
                 valloss += loss.item()
 
-            valloss /= len(val_dataloder)
-            if valloss < minloss:
-                minloss = valloss
-                torch.save(mode.state_dict(), "bestDetr.pt")
-                print(f"current best loss is {minloss}")
+        if epoch == epochs - 1:
+            torch.save(mode.state_dict(), "overfitDetr.pt")
+
     # -----------------------
     # for epoch in range(epochs):
     #     mode.train()
@@ -513,7 +510,7 @@ if __name__ == "__main__":
     #             loss = train_one_epoch(optimizer, mode, image, targets)
     #             if minloss > loss.item():
     #                 minloss = loss.item()
-    #                 torch.save(mode.state_dict(), "overfit.pt")
+    #                 torch.save(mode.state_dict(), "overfit.pt"7)
     #             break
     # for i, (image, targets) in enumerate(train_dataloder):
     #     if i == 0:
