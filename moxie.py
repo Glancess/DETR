@@ -497,8 +497,6 @@ if __name__ == "__main__":
                 indices = Getmatcher(cls, box, targets)
                 loss = Loss(indices, targets, cls, box)
 
-                valloss += loss.item()
-
         if epoch == epochs - 1:
             torch.save(mode.state_dict(), "overfitDetr.pt")
 
