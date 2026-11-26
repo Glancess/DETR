@@ -29,7 +29,9 @@ def Getrealimage():
 if __name__ == "__main__":
     os.makedirs("results", exist_ok=True)
     mode = model()
-    state = torch.load("/home/yangzhuohan/project/DETR/bestDetr.pt", map_location="cpu")
+    state = torch.load(
+        "/home/yangzhuohan/project/DETR/overfitDetr.pt", map_location="cpu"
+    )
     mode.load_state_dict(state)
     show = Getrealimage()
     for imgname in show:
