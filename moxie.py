@@ -465,7 +465,7 @@ if __name__ == "__main__":
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device:", device)
-    epochs = 200
+    epochs = 400
     mode = model().to(device)
     mode.backbone.requires_grad_(False)
     optimizer = torch.optim.Adam(
