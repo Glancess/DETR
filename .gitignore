@@ -10,3 +10,4 @@ results/history.json
 .DS_Store
 *.pt
 *.jpg
+drawHistory.py
