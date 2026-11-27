@@ -8,7 +8,7 @@ import torch.nn as nn
 import torchvision
 from torchvision.models import resnet50, ResNet50_Weights
 from torchvision.models.feature_extraction import create_feature_extractor
-from torchvision.ops import box_convert, generalized_box_iou
+from torchvision.ops import box_convert, generalized_box_iou, box_iou
 from scipy.optimize import linear_sum_assignment
 import torch.optim.optimizer
 
@@ -273,7 +273,6 @@ def train_one_epoch(optimizer, model, image, targets):
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    return loss
 
 
 def collate_fn(batch):
@@ -405,41 +404,175 @@ class MyDataset(torch.utils.data.Dataset):
         return img, target
 
 
+def Ap(cls, box, targets, APx, records):  # B 40 81 ,B 40 4,targets is list,len is B
+    # records = {c: {"scores": [], "tp": [], "fp": [], "gt_num": 0} for c in range(80)}
+    p = cls.softmax(-1)  # B 40 81
+
+    (
+        score,
+        label,
+    ) = p[
+        :, :, :-1
+    ].max(  # No background
+        -1
+    )  # B 40
+    for i in range(len(targets)):
+        classes = torch.cat([targets[i]["cls"], label[i]]).unique()
+
+        for onecls in classes:
+            pred_mask = label[i] == onecls
+            gt_mask = targets[i]["cls"] == onecls
+
+            pred_boxes = box[i][pred_mask]
+            pred_scores = score[i][pred_mask]
+            gt_boxes = targets[i]["gtbox"][gt_mask]
+
+            indices = torch.argsort(pred_scores, descending=True)
+            pred_boxes = pred_boxes[indices]
+            pred_scores = pred_scores[indices]  # sorted
+
+            pred_xyxy = box_convert(pred_boxes, "cxcywh", "xyxy")
+            gt_xyxy = box_convert(gt_boxes, "cxcywh", "xyxy")
+
+            iou = box_iou(pred_xyxy, gt_xyxy)
+            # like assume pre have 4,gt have 3,  4*3.(have sorted)
+            boolvisited = torch.zeros(
+                len(gt_boxes), dtype=torch.bool, device=iou.device
+            )
+
+            tp = torch.zeros(len(pred_boxes), device=iou.device)
+            fp = torch.zeros(len(pred_boxes), device=iou.device)
+
+            for j in range(len(pred_boxes)):
+                current_iou = iou[j]  # [M]
+                current_iou[boolvisited] = -1  # visited set is -1
+                maxiou, index = current_iou.max(-1)  # get the remain gtbox
+                if maxiou < APx:
+                    fp[j] = 1
+                    continue
+                boolvisited[index] = True
+                tp[j] = 1
+
+            c = onecls.item()
+            records[c]["scores"].append(pred_scores)
+            records[c]["tp"].append(tp)
+            records[c]["fp"].append(fp)
+            records[c]["gt_num"] += len(gt_boxes)
+
+
+def compute_ap(records):
+    aps = []
+    for record in records.values():
+        # 1. 获取该类别 GT 总数
+        thisgtnum = record["gt_num"]
+        if thisgtnum == 0:
+            continue
+        if len(record["tp"]) == 0:
+            aps.append(0.0)
+            continue
+        # 2. 合并 scores、tp、fp
+        scores = torch.cat(record["scores"], -1)
+        tp = torch.cat(record["tp"], -1)
+        fp = torch.cat(record["fp"], -1)
+        # 3. 全局同步排序
+        indic = torch.argsort(scores, descending=True)
+        scores = scores[indic]
+        tp = tp[indic]
+        fp = fp[indic]
+        # 4. 累积求和
+        precison = torch.zeros([len(scores)])
+        recall = torch.zeros([len(scores)])
+
+        cum_tp = tp.cumsum(0)
+        cum_fp = fp.cumsum(0)
+        precison = cum_tp / (cum_tp + cum_fp)
+        recall = cum_tp / thisgtnum
+        # 插值法
+        for i in range(len(precison) - 2, -1, -1):
+            if precison[i + 1] > precison[i]:
+                precison[i] = precison[i + 1]
+
+        AP = recall[0] * precison[0]
+
+        for i in range(1, len(precison)):
+            AP += (recall[i] - recall[i - 1]) * precison[i]
+        aps.append(AP)
+    return sum(aps) / len(aps) if len(aps) > 0 else float("nan")
+
+
+def prepare_map_data(cls, box, targets, H, W):
+    """
+        preds = [
+        {
+            "boxes": torch.tensor([
+                [100., 100., 50., 50.],
+                [200., 200., 60., 60.]
+            ]),
+            "scores": torch.tensor([0.95, 0.8]),
+            "labels": torch.tensor([0, 1])
+        }
+    ]
+
+    targets = [
+        {
+            "boxes": torch.tensor([
+                [100., 100., 50., 50.]
+            ]),
+            "labels": torch.tensor([0])
+        }
+    ]
+    """
+    p = cls.softmax(-1)
+    scores, labels = p[..., :-1].max(-1)
+    preds = []
+
+    scale = torch.tensor([W, H, W, H], device="cpu")
+    new_targets = []
+    for i in range(len(targets)):
+        preds.append(
+            {
+                "boxes": (box[i]).detach().cpu() * scale,
+                "scores": scores[i].detach().cpu(),
+                "labels": labels[i].cpu(),
+            }
+        )
+
+        new_targets.append(
+            {
+                "boxes": (targets[i]["gtbox"]).cpu() * scale,
+                "labels": targets[i]["cls"].cpu(),
+            }
+        )
+    return preds, new_targets
+
+
+def evaluate_map(model, dataloader):
+    metric = MeanAveragePrecision(
+        box_format="cxcywh", iou_type="bbox", class_metrics=True
+    )
+    model.eval()
+    device = next(model.parameters()).device
+    with torch.no_grad():
+        for image, targets in dataloader:
+            image = image.to(device)
+            # 2. 获取 H、W
+
+            H, W = image.shape[-2:]
+            # 3. Forward 得到 cls、box
+            cls, box = model(image)
+            # 4. 调用 prepare_map_data()
+            preds, new_targets = prepare_map_data(cls, box, targets, H, W)
+            # 5. metric.update()
+            metric.update(preds, new_targets)
+        # 6. metric.compute()
+        result = metric.compute()
+        # 7. return result
+        return result
+
+
 if __name__ == "__main__":
-    # mode = model()
-    # X = torch.randn([1, 3, 640, 640])
-    # gtbox = torch.tensor(
-    #     [[0.5, 0.5, 0.2, 0.3], [0.3, 0.4, 0.1, 0.2], [0.7, 0.6, 0.2, 0.2]],
-    #     dtype=torch.float32,
-    # )
-    # clss = torch.tensor([1, 2, 3], dtype=torch.long)
-    # targets = [{"cls": clss, "gtbox": gtbox}]  # construct targets
-    # optimizer = torch.optim.Adam(mode.parameters(), lr=1e-4)
-    # epoch = 100
-    # for i in range(epoch):
-    #     train_one_epoch(optimizer, mode, X, targets)
-    # mode.eval()
-    # with torch.no_grad():
-    #     # out intension is the trained model that give it pre_X,get the prebox,and indices,compute the error with mathed gtbox
-    #     cls, box = mode(X)
-    #     indices = Getmatcher(cls, box, targets)
-    #     pred_idex, gt_idx = indices[0]
-    #     print(pred_idex)
-    #     print(gt_idx)
-    #     print(box[0, pred_idex])
-    #     print(gtbox[gt_idx])
-    #     error = torch.abs(box[0, pred_idex] - gtbox[gt_idx]).mean()
-    #     gtxyxy = box_convert(gtbox[gt_idx], in_fmt="cxcywh", out_fmt="xyxy")
-    #     prexyxy = box_convert(box[0, pred_idex], in_fmt="cxcywh", out_fmt="xyxy")
-    #     giou = generalized_box_iou(prexyxy, gtxyxy)
-    #     gious = torch.diag(giou).mean()
-    #     print(error)
-    #     print(gious)
-    #     prob = cls.softmax(dim=-1)
-    #     pred_classes = prob.argmax(dim=-1)
-    #     print(pred_classes[0])
-    #     print(pred_classes[0, pred_idex], clss[gt_idx])
     from torch.utils.data import random_split
+    from torchmetrics.detection import MeanAveragePrecision
 
     dataset = MyDataset("/opt/data/private/datasets/yangzhuohan/coco128")
 
@@ -449,12 +582,6 @@ if __name__ == "__main__":
     train_dataset, val_dataset = random_split(
         dataset, [train_num, val_num], generator=torch.Generator().manual_seed(42)
     )
-    # img, target = dataset[0]
-    # print(img.shape)
-    # print(target["cls"].shape)
-    # print(target["gtbox"].shape)
-    # print(target["cls"].dtype)
-    # print(target["gtbox"].dtype)
 
     train_dataloder = torch.utils.data.DataLoader(
         train_dataset, 6, True, collate_fn=collate_fn
@@ -471,8 +598,8 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(
         filter(lambda p: p.requires_grad, mode.parameters()), lr=1e-4
     )
-    minloss = 1e9
-    # -----------------------
+
+    best_map = -1.0
     print("---------------Start Train--------------------")
     for epoch in range(epochs):
         mode.train()
@@ -483,82 +610,13 @@ if __name__ == "__main__":
             for target in targets:
                 target["cls"] = target["cls"].to(device)
                 target["gtbox"] = target["gtbox"].to(device)
-            loss = train_one_epoch(optimizer, mode, image, targets)
-        print("---------------Validation--------------------")
-        mode.eval()
-        with torch.no_grad():
+            train_one_epoch(optimizer, mode, image, targets)
+        result = evaluate_map(mode, val_dataloder)
 
-            for image, targets in val_dataloder:
-                image = image.to(device)
-                for target in targets:
-                    target["cls"] = target["cls"].to(device)
-                    target["gtbox"] = target["gtbox"].to(device)
-                cls, box = mode(image)
-                indices = Getmatcher(cls, box, targets)
-                loss = Loss(indices, targets, cls, box)
+        # 放在每轮训练结束后，与 batch 循环同级
+        result = evaluate_map(mode, val_dataloder)
+        val_map = result["map"].item()
 
-        if epoch == epochs - 1:
-            torch.save(mode.state_dict(), "overfitDetr.pt")
-
-    # -----------------------
-    # for epoch in range(epochs):
-    #     mode.train()
-    #     for i, (image, targets) in enumerate(train_dataloder):
-    #         if i == 0:
-    #             loss = train_one_epoch(optimizer, mode, image, targets)
-    #             if minloss > loss.item():
-    #                 minloss = loss.item()
-    #                 torch.save(mode.state_dict(), "overfit.pt"7)
-    #             break
-    # for i, (image, targets) in enumerate(train_dataloder):
-    #     if i == 0:
-    #         mode = model()
-
-    #         state = torch.load("overfit.pt")
-    #         mode.load_state_dict(state)
-    #         mode.eval()
-    #         with torch.no_grad():
-    #             cls, box = mode(image)
-    #             # cls like 1 50 81 ,box like 1 50 4
-    #             p = torch.softmax(cls[0], -1)
-    #             conf, label = p.max(-1)
-    #             print(f"conf is {conf}")
-    #             print(f"label is {label}")
-    #             keep = (conf > 0.8) & (
-    #                 label != 80
-    #             )  # 背景类 80 排除掉    threshold = 0.4
-    #             box = box[0][keep]  # [N, 4] 归一化 cxcywh
-    #             label = label[keep]
-    #             conf = conf[keep]
-    #             print(f"conf(threshold) is {conf}")
-    #             print(f"label(threshold) is {label}")
-    #             print(f"the really target:{targets[0]["cls"]}")
-    #             # val时候，不存在targets，也就没有匈牙利匹配的，
-    #             # 目标的顺序刚好对的上，看看giou
-    #             boxyxy = box_convert(box, in_fmt="cxcywh", out_fmt="xyxy")
-    #             reallyxyxy = box_convert(
-    #                 targets[0]["gtbox"], in_fmt="cxcywh", out_fmt="xyxy"
-    #             )
-    #             giou = torch.diag(generalized_box_iou(boxyxy, reallyxyxy))
-    #             H, W = image.shape[-2:]  # image: [1,3,640,640]
-    #             scale = box.new_tensor([W, H, W, H])
-    #             boxxyxy = boxyxy * scale
-    #             reallyxyxy = reallyxyxy * scale
-    #             print(giou)
-
-    #             img = image[0]
-    #             mean = img.new_tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-    #             std = img.new_tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-    #             img = img * std + mean
-    #             # 返归一化
-    #             img = (img.clamp(0, 1) * 255).to(torch.uint8).cpu()
-
-    #             prenames = [
-    #                 f"{int(c)}: {float(s):.2f}" for c, s in zip(label, conf)
-    #             ]  # 把两个序列按位置配对，返回一组元组。
-    #             realnames = [f"{int(c)}" for c in targets[0]["cls"]]
-    #             paint = draw_bounding_boxes(img, boxxyxy, labels=prenames, colors="red")
-    #             paint = draw_bounding_boxes(
-    #                 paint, reallyxyxy, labels=realnames, colors="green"
-    #             )
-    #             to_pil_image(paint).show()
+        if val_map > best_map:
+            best_map = val_map
+            torch.save(mode.state_dict(), "bestDetr.pt")
