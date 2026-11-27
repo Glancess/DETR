@@ -601,22 +601,34 @@ if __name__ == "__main__":
 
     best_map = -1.0
     print("---------------Start Train--------------------")
+    history = {"map": [], "map_50": [], "map_75": []}
     for epoch in range(epochs):
         mode.train()
         mode.backbone.eval()
-        print(f"-----------The Epoch={epoch+1}-----------------------")
+        print(f"-----------Epoch={epoch+1}----------------")
         for i, (image, targets) in enumerate(train_dataloder):
             image = image.to(device)
             for target in targets:
                 target["cls"] = target["cls"].to(device)
                 target["gtbox"] = target["gtbox"].to(device)
             train_one_epoch(optimizer, mode, image, targets)
-        result = evaluate_map(mode, val_dataloder)
-
-        # 放在每轮训练结束后，与 batch 循环同级
+        # 每轮训练结束后评估
         result = evaluate_map(mode, val_dataloder)
         val_map = result["map"].item()
+        print(f"mAP: {val_map:.4f}")
+        print(f"mAP@50: {result['map_50'].item():.4f}")
+        print(f"mAP@75: {result['map_75'].item():.4f}")
 
         if val_map > best_map:
             best_map = val_map
             torch.save(mode.state_dict(), "bestDetr.pt")
+
+        if epoch == epochs - 1:
+            torch.save(mode.state_dict(), "lastDetr.pt")
+        history["map"].append(val_map)
+        history["map_50"].append(result["map_50"].item())
+        history["map_75"].append(result["map_75"].item())
+        import json
+
+        with open("history.json", "w") as f:
+            json.dump(history, f, indent=4)
